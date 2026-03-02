@@ -22,6 +22,7 @@ import es.daw.clinicaapi.repository.InvoiceRepository;
 import es.daw.clinicaapi.repository.MedicalServiceRepository;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -40,11 +41,20 @@ public class InvoiceService {
     private final InvoiceRepository invoiceRepository;
     private final MedicalServiceRepository medicalServiceRepository;
 
+    @Value("${invoice.max-lines}")
+    private int invoiceMaxLines;
+
     @Transactional
     public InvoiceResponse issueInvoiceForAppointment(Long appointmentId, InvoiceIssueRequest req) {
 
         // 1. No puede haber servicios duplicados en el json request; si no → BadRequestException (400)
         checkDuplicateServices(req.lines());
+
+        // 1.1 Máximo 10 líneas por factura
+        // Para pruebas por ahora no pongo 10 porque no dispongo de este set de datos...
+        if (req.lines().size() > invoiceMaxLines) {
+            throw new BusinessRuleException("Invoice cannot have more than " + invoiceMaxLines + " lines. Requested: " + req.lines().size());
+        }
 
         // 2. La cita debe existir; si no → NotFoundException (404).
         Appointment appointment = appointmentRepository.findById(appointmentId)
@@ -145,40 +155,19 @@ public class InvoiceService {
 
     }
 
-    private void checkDuplicateServices(List<InvoiceLineCreateRequest> lines) {
-        Set<Long> ids = new HashSet<>();
-        for (InvoiceLineCreateRequest line : lines) {
-            if(!ids.add(line.medicalServiceId()))
-                throw new BadRequestException("Duplicate medical service id in lines: "+line.medicalServiceId());
-        }
-    }
-
-    // Método que finalmente no uso porque lo integro en el servicio de creación de la factura, pero lo dejo aquí para que veáis cómo se haría la validación de cada servicio y el lanzamiento de las excepciones correspondientes.
-    private void validateMedicalServices(List<InvoiceLineCreateRequest> lines) {
-        for (InvoiceLineCreateRequest line : lines) {
-            Long serviceId = line.medicalServiceId();
-            MedicalService service = medicalServiceRepository.findById(serviceId)
-                    .orElseThrow(() -> new NotFoundException("Medical service not found with id: " + serviceId));
-
-            if (!service.isActive()) {
-                throw new BusinessRuleException("Medical service is not active: " + serviceId);
-            }
-        }
-    }
-
     // método encargado de facturar...
     /*
-    La factura debe existir:
-        Si no existe: 404 NOT FOUND.
-    Solo se puede pagar si está en estado PENDING:
-        Si está en cualquier otro estado (PAID, CANCELLED, etc.): 409 CONFLICT.
-        "Invoice cannot be paid from status: X"
-    Al pagar:
-        status = PAID
-        paidAt = now()
-        paymentMethod = req.paymentMethod()
+        La factura debe existir:
+            Si no existe: 404 NOT FOUND.
+        Solo se puede pagar si está en estado PENDING:
+            Si está en cualquier otro estado (PAID, CANCELLED, etc.): 409 CONFLICT.
+            "Invoice cannot be paid from status: X"
+        Al pagar:
+            status = PAID
+            paidAt = now()
+            paymentMethod = req.paymentMethod()
 
-    La operación debe ser transaccional (@Transactional).
+        La operación debe ser transaccional (@Transactional).
      */
     @Transactional
     public InvoiceResponse payInvoice(Long invoiceId, InvoicePayRequest request){
@@ -207,7 +196,40 @@ public class InvoiceService {
 
     }
 
+    // ---------- MÉTODO PROPIOS DE UTILIDADES -------
+    /**
+     * Comprueba si existen servicios duplicados
+     * @param lines
+     */
+    private void checkDuplicateServices(List<InvoiceLineCreateRequest> lines) {
+        Set<Long> ids = new HashSet<>();
+        Set<Long> duplicates = new HashSet<>();
+        //boolean repetidos = false;
 
+        for (InvoiceLineCreateRequest line : lines) {
+            if(!ids.add(line.medicalServiceId())) {
+                duplicates.add(line.medicalServiceId());
+                //throw new BadRequestException("Duplicate medical service id in lines: "+line.medicalServiceId());
+                //repetidos = true;
+            }
+        }
 
+        if (!duplicates.isEmpty()) {
+            throw new BadRequestException("Duplicate medical service id in lines: "+duplicates);
+        }
+
+    }
+    // Método que finalmente no uso porque lo integro en el servicio de creación de la factura, pero lo dejo aquí para que veáis cómo se haría la validación de cada servicio y el lanzamiento de las excepciones correspondientes.
+//    private void validateMedicalServices(List<InvoiceLineCreateRequest> lines) {
+//        for (InvoiceLineCreateRequest line : lines) {
+//            Long serviceId = line.medicalServiceId();
+//            MedicalService service = medicalServiceRepository.findById(serviceId)
+//                    .orElseThrow(() -> new NotFoundException("Medical service not found with id: " + serviceId));
+//
+//            if (!service.isActive()) {
+//                throw new BusinessRuleException("Medical service is not active: " + serviceId);
+//            }
+//        }
+//    }
 
 }
